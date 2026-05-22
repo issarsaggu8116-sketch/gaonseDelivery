@@ -16,6 +16,13 @@ const subOrderSchema = new mongoose.Schema(
       required: true,
     },
 
+    // 🌅 DELIVERY TIME
+    deliveryTime: {
+      type: String,
+      enum: ["morning", "evening"],
+      default: "morning",
+    },
+
     // 📦 Product snapshot
     item: {
       _id: String,
@@ -81,4 +88,7 @@ const subOrderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export const SubOrder = mongoose.model("SubOrder", subOrderSchema);
+export const SubOrder = mongoose.model(
+  "SubOrder",
+  subOrderSchema
+);
