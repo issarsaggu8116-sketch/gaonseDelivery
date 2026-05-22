@@ -27,6 +27,9 @@ const subscriptionSchema = new mongoose.Schema(
       required: true,
     },
 
+    /* ---------------------------------- */
+    /* 📅 DAYS */
+    /* ---------------------------------- */
     days: [
       {
         type: String,
@@ -34,6 +37,9 @@ const subscriptionSchema = new mongoose.Schema(
       },
     ],
 
+    /* ---------------------------------- */
+    /* 📆 DATES */
+    /* ---------------------------------- */
     dates: [
       {
         type: Number,
@@ -42,39 +48,68 @@ const subscriptionSchema = new mongoose.Schema(
       },
     ],
 
+    /* ---------------------------------- */
+    /* 🌅 DELIVERY TIME */
+    /* ---------------------------------- */
+    deliveryTime: {
+      type: String,
+      enum: ["morning", "evening"],
+      default: "morning",
+    },
+
+    /* ---------------------------------- */
+    /* 🥛 QUANTITY */
+    /* ---------------------------------- */
     quantity: {
       type: Number,
       default: 1,
     },
 
+    /* ---------------------------------- */
+    /* 📍 ADDRESS */
+    /* ---------------------------------- */
     address: {
       text: {
         type: String,
         required: true,
       },
+
       zone: {
         type: Object,
         required: true,
       },
+
       city: {
         type: Object,
         required: true,
       },
     },
 
+    /* ---------------------------------- */
+    /* 🔄 STATUS */
+    /* ---------------------------------- */
     status: {
       type: String,
       enum: ["active", "paused"],
       default: "active",
     },
 
+    /* ---------------------------------- */
+    /* 📅 START DATE */
+    /* ---------------------------------- */
     startDate: {
       type: Date,
       default: Date.now,
     },
 
+    /* ---------------------------------- */
+    /* 🛑 END DATE */
+    /* ---------------------------------- */
     endDate: Date,
 
+    /* ---------------------------------- */
+    /* 🗑️ SOFT DELETE */
+    /* ---------------------------------- */
     isDeleted: {
       type: Boolean,
       default: false,
@@ -83,13 +118,22 @@ const subscriptionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// 🔥 CUSTOM VALIDATION
+/* ---------------------------------- */
+/* 🔥 CUSTOM VALIDATION */
+/* ---------------------------------- */
 subscriptionSchema.pre("validate", function (next) {
-  if (this.type === "days" && (!this.days || this.days.length === 0)) {
+
+  if (
+    this.type === "days" &&
+    (!this.days || this.days.length === 0)
+  ) {
     return next(new Error("Please select days"));
   }
 
-  if (this.type === "dates" && (!this.dates || this.dates.length === 0)) {
+  if (
+    this.type === "dates" &&
+    (!this.dates || this.dates.length === 0)
+  ) {
     return next(new Error("Please select dates"));
   }
 
