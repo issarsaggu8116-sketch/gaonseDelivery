@@ -1,15 +1,32 @@
-import {Wallet} from "../models/walletModel.js";
+import { SubOrder } from "../models/suborder.js";
+import { Wallet } from "../models/walletModel.js";
 import "../models/User.js";
 import { Subscription } from "../models/Subscriptions.js";
-import { SubOrder } from "../models/suborder.js";
 
+/* --------------------------------------------------- */
+/* 🥛 GENERATE SUBSCRIPTION ORDERS */
+/* --------------------------------------------------- */
 export const generateSubscriptionOrders = async (req, res) => {
   try {
+
     const now = new Date();
 
-    const dayMap = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const dayMap = [
+      "sun",
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri",
+      "sat",
+    ];
+
     const todayDay = dayMap[now.getDay()];
     const todayDate = now.getDate();
+
+    /* 🌅 DELIVERY TIME */
+    const deliveryTime =
+      req.body.deliveryTime || "morning";
 
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -17,43 +34,80 @@ export const generateSubscriptionOrders = async (req, res) => {
     const endOfDay = new Date();
     endOfDay.setHours(23, 59, 59, 999);
 
+    /* ---------------------------------- */
+    /* 📦 FIND SUBSCRIPTIONS */
+    /* ---------------------------------- */
     const subscriptions = await Subscription.find({
+
       status: "active",
+
       isDeleted: false,
+
+      deliveryTime,
+
       $or: [
-        { type: "days", days: todayDay },
-        { type: "dates", dates: todayDate }
-      ]
+        {
+          type: "days",
+          days: todayDay,
+        },
+        {
+          type: "dates",
+          dates: todayDate,
+        },
+      ],
+
     }).populate("product");
 
     let createdCount = 0;
 
     for (const sub of subscriptions) {
 
+      /* ---------------------------------- */
+      /* 🚫 DUPLICATE CHECK */
+      /* ---------------------------------- */
       const alreadyExists = await SubOrder.findOne({
+
         subscription: sub._id,
-        createdAt: { $gte: startOfDay, $lte: endOfDay }
+
+        deliveryTime,
+
+        createdAt: {
+          $gte: startOfDay,
+          $lte: endOfDay,
+        },
+
       });
 
       if (alreadyExists) continue;
 
       const price = sub.product?.price || 0;
+
       const total = price * sub.quantity;
 
+      /* ---------------------------------- */
+      /* 🧾 CREATE ORDER */
+      /* ---------------------------------- */
       await SubOrder.create({
+
         user: sub.user,
+
         subscription: sub._id,
+
+        deliveryTime,
 
         item: {
           _id: String(sub.product._id),
           name: sub.product.name,
           price,
-          qty: sub.quantity
+          qty: sub.quantity,
         },
 
         address: sub.address,
+
         total,
-        status: "approved"
+
+        status: "approved",
+
       });
 
       createdCount++;
@@ -61,15 +115,16 @@ export const generateSubscriptionOrders = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `${createdCount} subscription orders generated`
+      message: `${createdCount} ${deliveryTime} subscription orders generated`,
     });
 
   } catch (err) {
 
     return res.status(500).json({
       success: false,
-      message: err.message
+      message: err.message,
     });
+
   }
 };
 
@@ -84,12 +139,35 @@ export const getTodaySubOrders = async (req, res) => {
     const end = new Date();
     end.setHours(23, 59, 59, 999);
 
-    const orders = await SubOrder.find({
-      createdAt: { $gte: start, $lte: end },
-      status: { $in: ["approved", "out_for_delivery"] },
-    })
+    /* 🌅 DELIVERY TIME FILTER */
+    const deliveryTime =
+      req.query.deliveryTime;
+
+
+    const filter = {
+      createdAt: {
+        $gte: start,
+        $lte: end,
+      },
+
+      status: {
+        $in: [
+          "approved",
+          "out_for_delivery",
+        ],
+      },
+    };
+
+    if (deliveryTime) {
+      filter.deliveryTime = deliveryTime;
+    }
+
+    const orders = await SubOrder.find(filter)
+
       .populate("user", "name phone")
+
       .sort({ createdAt: -1 })
+
       .lean();
 
     res.json({
@@ -97,13 +175,20 @@ export const getTodaySubOrders = async (req, res) => {
       count: orders.length,
       orders,
     });
+
   } catch (err) {
-    console.log("FETCH SUBORDERS ERROR:", err.message);
+
+    console.log(
+      "FETCH SUBORDERS ERROR:",
+      err.message
+    );
 
     res.status(500).json({
       success: false,
-      message: "Failed to fetch today's subscription orders",
+      message:
+        "Failed to fetch today's subscription orders",
     });
+
   }
 };
 
@@ -112,7 +197,10 @@ export const getTodaySubOrders = async (req, res) => {
 /* --------------------------------------------------- */
 export const startSubOrderDelivery = async (req, res) => {
   try {
-    const order = await SubOrder.findById(req.params.id);
+
+    const order = await SubOrder.findById(
+      req.params.id
+    );
 
     if (!order) {
       return res.status(404).json({
@@ -124,12 +212,15 @@ export const startSubOrderDelivery = async (req, res) => {
     if (order.status !== "approved") {
       return res.status(400).json({
         success: false,
-        message: "Only approved orders can start delivery",
+        message:
+          "Only approved orders can start delivery",
       });
     }
 
     order.status = "out_for_delivery";
-    order.deliveredBy = req.delivery?._id || null;
+
+    order.deliveredBy =
+      req.delivery?._id || null;
 
     await order.save();
 
@@ -142,13 +233,19 @@ export const startSubOrderDelivery = async (req, res) => {
       message: "Delivery started successfully",
       order,
     });
+
   } catch (err) {
-    console.log("START DELIVERY ERROR:", err.message);
+
+    console.log(
+      "START DELIVERY ERROR:",
+      err.message
+    );
 
     res.status(500).json({
       success: false,
       message: "Failed to start delivery",
     });
+
   }
 };
 
@@ -157,7 +254,10 @@ export const startSubOrderDelivery = async (req, res) => {
 /* --------------------------------------------------- */
 export const completeAndDeleteSubOrder = async (req, res) => {
   try {
-    const order = await SubOrder.findById(req.params.id);
+
+    const order = await SubOrder.findById(
+      req.params.id
+    );
 
     if (!order) {
       return res.status(404).json({
@@ -172,24 +272,31 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     if (order.status !== "out_for_delivery") {
       return res.status(400).json({
         success: false,
-        message: "Order is not out for delivery",
+        message:
+          "Order is not out for delivery",
       });
     }
 
     /* ------------------------------- */
-    /* 2️⃣ MARK AS DELIVERED */
+    /* 2️⃣ MARK DELIVERED */
     /* ------------------------------- */
     order.status = "delivered";
+
     order.deliveredAt = new Date();
 
     await order.save();
 
-    req.io?.emit("subOrderDelivered", order);
+    req.io?.emit(
+      "subOrderDelivered",
+      order
+    );
 
     /* ------------------------------- */
     /* 3️⃣ WALLET CHECK */
     /* ------------------------------- */
-    const wallet = await Wallet.findOne({ user: order.user });
+    const wallet = await Wallet.findOne({
+      user: order.user,
+    });
 
     if (!wallet) {
       return res.status(404).json({
@@ -201,7 +308,8 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     if (wallet.balance < order.total) {
       return res.status(400).json({
         success: false,
-        message: "Insufficient wallet balance",
+        message:
+          "Insufficient wallet balance",
       });
     }
 
@@ -215,25 +323,36 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     /* ------------------------------- */
     /* 5️⃣ DELETE ORDER */
     /* ------------------------------- */
-    await SubOrder.findByIdAndDelete(req.params.id);
+    await SubOrder.findByIdAndDelete(
+      req.params.id
+    );
 
-    req.io?.emit("subOrderDeleted", req.params.id);
+    req.io?.emit(
+      "subOrderDeleted",
+      req.params.id
+    );
 
     /* ------------------------------- */
     /* 6️⃣ FINAL RESPONSE */
     /* ------------------------------- */
     return res.json({
       success: true,
-      message: "Delivered, billed & deleted successfully",
+      message:
+        "Delivered, billed & deleted successfully",
       walletBalance: wallet.balance,
     });
 
   } catch (err) {
-    console.log("SUBORDER FLOW ERROR:", err.message);
+
+    console.log(
+      "SUBORDER FLOW ERROR:",
+      err.message
+    );
 
     return res.status(500).json({
       success: false,
       message: "Something went wrong",
     });
+
   }
 };
