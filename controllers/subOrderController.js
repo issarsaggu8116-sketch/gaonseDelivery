@@ -1,6 +1,78 @@
 import { SubOrder } from "../models/suborder.js";
 import {Wallet} from "../models/walletModel.js";
 import "../models/User.js";
+import { Subscription } from "../models/Subscriptions.js";
+import { SubOrder } from "../models/suborder.js";
+
+export const generateSubscriptionOrders = async (req, res) => {
+  try {
+    const now = new Date();
+
+    const dayMap = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const todayDay = dayMap[now.getDay()];
+    const todayDate = now.getDate();
+
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const subscriptions = await Subscription.find({
+      status: "active",
+      isDeleted: false,
+      $or: [
+        { type: "days", days: todayDay },
+        { type: "dates", dates: todayDate }
+      ]
+    }).populate("product");
+
+    let createdCount = 0;
+
+    for (const sub of subscriptions) {
+
+      const alreadyExists = await SubOrder.findOne({
+        subscription: sub._id,
+        createdAt: { $gte: startOfDay, $lte: endOfDay }
+      });
+
+      if (alreadyExists) continue;
+
+      const price = sub.product?.price || 0;
+      const total = price * sub.quantity;
+
+      await SubOrder.create({
+        user: sub.user,
+        subscription: sub._id,
+
+        item: {
+          _id: String(sub.product._id),
+          name: sub.product.name,
+          price,
+          qty: sub.quantity
+        },
+
+        address: sub.address,
+        total,
+        status: "approved"
+      });
+
+      createdCount++;
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `${createdCount} subscription orders generated`
+    });
+
+  } catch (err) {
+
+    return res.status(500).json({
+      success: false,
+      message: err.message
+    });
+  }
+};
 
 /* --------------------------------------------------- */
 /* 📦 GET TODAY SUBORDERS */
