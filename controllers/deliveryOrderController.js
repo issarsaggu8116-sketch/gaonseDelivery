@@ -138,42 +138,144 @@ export const approveOrder = async (req, res) => {
 // 📊 DAILY SUMMARY
 export const getDailySummary = async (req, res) => {
   try {
+
     const partner = req.partner;
 
+    /* ---------------------------------- */
+    /* 📦 NORMAL ORDERS */
+    /* ---------------------------------- */
     const orders = await Order.find({
-      "address.zone._id": partner.zone.toString(),
-      status: { $in: ["approved", "out_for_delivery"] },
+      "address.zone._id":
+        partner.zone.toString(),
+
+      status: {
+        $in: [
+          "approved",
+          "out_for_delivery",
+        ],
+      },
     });
 
-    let totalOrders = orders.length;
-    let totalAmount = 0;
+    /* ---------------------------------- */
+    /* 🔁 SUBSCRIPTION ORDERS */
+    /* ---------------------------------- */
+    const subOrders = await SubOrder.find({
+      "address.zone._id":
+        partner.zone.toString(),
 
+      status: {
+        $in: [
+          "approved",
+          "out_for_delivery",
+        ],
+      },
+    });
+
+    /* ---------------------------------- */
+    /* 📊 ITEM SUMMARY MAP */
+    /* ---------------------------------- */
     const itemsMap = {};
 
+    let totalAmount = 0;
+
+    let totalOrders =
+      orders.length + subOrders.length;
+
+    /* ---------------------------------- */
+    /* 📦 NORMAL ORDERS LOOP */
+    /* ---------------------------------- */
     orders.forEach((order) => {
+
       totalAmount += order.total;
 
       order.items.forEach((item) => {
-        if (!itemsMap[item.name]) {
-          itemsMap[item.name] = 0;
+
+        const key = item.name;
+
+        if (!itemsMap[key]) {
+
+          itemsMap[key] = {
+            name: item.name,
+
+            totalQty: 0,
+
+            normalQty: 0,
+
+            subscriptionQty: 0,
+
+            totalAmount: 0,
+          };
         }
-        itemsMap[item.name] += item.qty;
+
+        itemsMap[key].totalQty += item.qty;
+
+        itemsMap[key].normalQty += item.qty;
+
+        itemsMap[key].totalAmount +=
+          item.price * item.qty;
       });
     });
 
-    const itemsSummary = Object.keys(itemsMap).map((key) => ({
-      name: key,
-      qty: itemsMap[key],
-    }));
+    /* ---------------------------------- */
+    /* 🔁 SUBSCRIPTION ORDERS LOOP */
+    /* ---------------------------------- */
+    subOrders.forEach((order) => {
 
+      totalAmount += order.total;
+
+      const item =
+        order.item;
+
+      const key =
+        item?.name;
+
+      if (!itemsMap[key]) {
+
+        itemsMap[key] = {
+          name: item.name,
+
+          totalQty: 0,
+
+          normalQty: 0,
+
+          subscriptionQty: 0,
+
+          totalAmount: 0,
+        };
+      }
+
+      itemsMap[key].totalQty += item.qty;
+
+      itemsMap[key].subscriptionQty += item.qty;
+
+      itemsMap[key].totalAmount +=
+        item.price * item.qty;
+    });
+
+    /* ---------------------------------- */
+    /* 📋 FINAL ARRAY */
+    /* ---------------------------------- */
+    const itemsSummary =
+      Object.values(itemsMap);
+
+    /* ---------------------------------- */
+    /* ✅ RESPONSE */
+    /* ---------------------------------- */
     res.json({
       success: true,
+
       totalOrders,
+
       totalAmount,
+
       itemsSummary,
     });
+
   } catch (err) {
-    res.status(500).json({ message: err.message });
+
+    res.status(500).json({
+      message: err.message,
+    });
+
   }
 };
-
