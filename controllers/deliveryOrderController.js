@@ -7,9 +7,11 @@ export const getZoneOrders = async (req, res) => {
   try {
     const partner = req.partner;
 
-    const orders = await Order.find({
-  "address.zone._id": partner.zone.toString(), // ✅ FIX
-  status: { $in: ["approved", "out_for_delivery"] },
+   const orders = await Order.find({
+  "address.zone._id": partner.zone.toString(),
+  status: {
+    $in: ["approved", "out_for_delivery"],
+  },
 }).sort({ createdAt: -1 });
 
     res.json({
