@@ -37,26 +37,26 @@ export const generateSubscriptionOrders = async (req, res) => {
     /* ---------------------------------- */
     /* 📦 FIND SUBSCRIPTIONS */
     /* ---------------------------------- */
-    const subscriptions = await Subscription.find({
+    const partner = req.partner;
 
-      status: "active",
+const subscriptions = await Subscription.find({
+  status: "active",
+  isDeleted: false,
+  deliveryTime,
 
-      isDeleted: false,
+  "address.zone._id": partner.zone.toString(),
 
-      deliveryTime,
-
-      $or: [
-        {
-          type: "days",
-          days: todayDay,
-        },
-        {
-          type: "dates",
-          dates: todayDate,
-        },
-      ],
-
-    }).populate("product");
+  $or: [
+    {
+      type: "days",
+      days: todayDay,
+    },
+    {
+      type: "dates",
+      dates: todayDate,
+    },
+  ],
+}).populate("product");
 
     let createdCount = 0;
 
@@ -133,22 +133,25 @@ export const generateSubscriptionOrders = async (req, res) => {
 /* --------------------------------------------------- */
 export const getTodaySubOrders = async (req, res) => {
   try {
+    const partner = req.partner;
+
     const start = new Date();
     start.setHours(0, 0, 0, 0);
 
     const end = new Date();
     end.setHours(23, 59, 59, 999);
 
-    /* 🌅 DELIVERY TIME FILTER */
     const deliveryTime =
       req.query.deliveryTime;
-
 
     const filter = {
       createdAt: {
         $gte: start,
         $lte: end,
       },
+
+      "address.zone._id":
+        partner.zone.toString(),
 
       status: {
         $in: [
@@ -159,18 +162,22 @@ export const getTodaySubOrders = async (req, res) => {
     };
 
     if (deliveryTime) {
-      filter.deliveryTime = deliveryTime;
+      filter.deliveryTime =
+        deliveryTime;
     }
 
-    const orders = await SubOrder.find(filter)
+    const orders =
+      await SubOrder.find(filter)
+        .populate(
+          "user",
+          "name phone"
+        )
+        .sort({
+          createdAt: -1,
+        })
+        .lean();
 
-      .populate("user", "name phone")
-
-      .sort({ createdAt: -1 })
-
-      .lean();
-
-    res.json({
+    return res.json({
       success: true,
       count: orders.length,
       orders,
@@ -183,7 +190,7 @@ export const getTodaySubOrders = async (req, res) => {
       err.message
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message:
         "Failed to fetch today's subscription orders",
