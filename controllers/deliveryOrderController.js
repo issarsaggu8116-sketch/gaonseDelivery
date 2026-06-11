@@ -1,26 +1,47 @@
 import { Order } from "../models/Order.js";
 import {Wallet} from "../models/walletModel.js";
 import { SubOrder } from "../models/suborder.js";
+import { Zone } from "../models/Zones.js";
 
 // 📦 GET ZONE ORDERS
 export const getZoneOrders = async (req, res) => {
   try {
     const partner = req.partner;
 
-   const orders = await Order.find({
-  "address.zone._id": partner.zone.toString(),
-  status: {
-    $in: ["approved", "out_for_delivery"],
-  },
-}).sort({ createdAt: -1 });
+    const zone = await Zone.findById(
+      partner.zone
+    );
+
+    const orders = await Order.find({
+      "address.zone._id":
+        partner.zone.toString(),
+
+      status: {
+        $in: [
+          "approved",
+          "out_for_delivery",
+        ],
+      },
+    }).sort({ createdAt: -1 });
 
     res.json({
       success: true,
       count: orders.length,
+
+      zoneCenter: {
+        lat: zone.center.lat,
+        lng: zone.center.lng,
+      },
+
       orders,
     });
+
   } catch (err) {
-    res.status(500).json({ message: err.message });
+
+    res.status(500).json({
+      message: err.message,
+    });
+
   }
 };
 
@@ -139,6 +160,7 @@ export const approveOrder = async (req, res) => {
 };
 
 // 📊 DAILY SUMMARY
+
 export const getDailySummary = async (req, res) => {
   try {
 
