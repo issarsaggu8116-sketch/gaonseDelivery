@@ -1,3 +1,4 @@
+import { Zone } from "../models/Zones.js";
 import { SubOrder } from "../models/suborder.js";
 import { Wallet } from "../models/walletModel.js";
 import "../models/User.js";
@@ -133,7 +134,19 @@ const subscriptions = await Subscription.find({
 /* --------------------------------------------------- */
 export const getTodaySubOrders = async (req, res) => {
   try {
+
     const partner = req.partner;
+
+    const zone = await Zone.findById(
+      partner.zone
+    );
+
+    if (!zone) {
+      return res.status(404).json({
+        success: false,
+        message: "Zone not found",
+      });
+    }
 
     const start = new Date();
     start.setHours(0, 0, 0, 0);
@@ -179,7 +192,14 @@ export const getTodaySubOrders = async (req, res) => {
 
     return res.json({
       success: true,
+
       count: orders.length,
+
+      zoneCenter: {
+        lat: zone.center.lat,
+        lng: zone.center.lng,
+      },
+
       orders,
     });
 
