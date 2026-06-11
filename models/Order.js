@@ -17,6 +17,9 @@ const orderSchema = new mongoose.Schema(
       city: Object,
       zone: Object,
       text: String,
+
+      latitude: Number,
+      longitude: Number,
     },
 
     total: Number,
@@ -29,7 +32,14 @@ const orderSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "approved", "out_for_delivery", "delivered", "cancelled", "expired",],
+      enum: [
+        "pending",
+        "approved",
+        "out_for_delivery",
+        "delivered",
+        "cancelled",
+        "expired",
+      ],
       default: "pending",
     },
 
