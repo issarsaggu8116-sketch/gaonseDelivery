@@ -6,6 +6,8 @@ import { SubOrder } from "../models/suborder.js";
 export const getZoneOrders = async (req, res) => {
   try {
     const partner = req.partner;
+   await console.log(typeof partner.zone);
+   await console.log(partner.zone);
 
    const orders = await Order.find({
   "address.zone._id": partner.zone.toString(),
