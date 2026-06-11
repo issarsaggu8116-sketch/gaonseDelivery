@@ -9,6 +9,16 @@ const productSchema = new mongoose.Schema({
     type: mongoose.Schema.ObjectId,
     ref: "Category",
   },
+   
+  discount: {
+    type: Number,
+    default: 0, // percentage discount (e.g. 10 = 10%)
+  },
+
+  img_url: {
+    type: String,
+    default: "",
+  },
 
   city: {
     type: mongoose.Schema.ObjectId,
