@@ -36,6 +36,9 @@ const subOrderSchema = new mongoose.Schema(
       city: Object,
       zone: Object,
       text: String,
+
+      latitude: Number,
+      longitude: Number,
     },
 
     // 💰 Final amount
