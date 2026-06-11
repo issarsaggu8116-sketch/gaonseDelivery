@@ -69,20 +69,12 @@ const subscriptionSchema = new mongoose.Schema(
     /* 📍 ADDRESS */
     /* ---------------------------------- */
     address: {
-      text: {
-        type: String,
-        required: true,
-      },
+      city: Object,
+      zone: Object,
+      text: String,
 
-      zone: {
-        type: Object,
-        required: true,
-      },
-
-      city: {
-        type: Object,
-        required: true,
-      },
+      latitude: Number,
+      longitude: Number,
     },
 
     /* ---------------------------------- */
