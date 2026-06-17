@@ -77,11 +77,14 @@ const subOrderSchema = new mongoose.Schema(
     // 🚴 Delivery partner
     deliveredBy: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Partner",
+      ref: "DeliveryPartner",
       default: null,
     },
 
     deliveredAt: Date,
+
+    otp: Number,
+    otpExpire: Date,
 
     isDeleted: {
       type: Boolean,

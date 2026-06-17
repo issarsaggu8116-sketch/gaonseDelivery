@@ -9,6 +9,7 @@ import deliveryAuthRoutes from "./routes/deliveryAuthRoutes.js";
 import deliveryOrderRoutes from "./routes/deliveryOrderRoutes.js";
 import cityRoutes from "./routes/cityRoutes.js";
 import userRoutes from "./routes/userRoutes.js"; // 👤 NEW
+import khataRoutes from "./routes/khataRoutes.js";
 
 import { expirePendingOrders } from "./jobs/expireOrder.js";
 import { generateTodaySubscriptionOrders } from "./jobs/subscriptionOrder.js";
@@ -35,7 +36,8 @@ app.use("/api/delivery/today-orders", deliveryOrderRoutes);
 app.use("/api/delivery/subscribe-orders", subOrderRoutes);
 app.use("/api/delivery/cities", cityRoutes);
 app.use("/api/delivery/users", userRoutes); // 👤 NEW
+app.use("/api/delivery/khata", khataRoutes);
 
-app.listen(4000, () => {
-  console.log("🚚 Delivery Server running on port 4000");
+app.listen(4001, () => {
+  console.log("🚚 Delivery Server running on port 4001");
 });

@@ -5,6 +5,8 @@ import {
   getTodaySubOrders,
   startSubOrderDelivery,
   completeAndDeleteSubOrder,
+  sendSubOrderOTP,
+  deleteSubOrder,
 } from "../controllers/subOrderController.js";
 
 import { isDeliveryAuth } from "../middlewares/isDeliveryAuth.js";
@@ -49,12 +51,32 @@ router.put(
 
 
 /* ---------------------------------- */
+/* 📧 Send OTP */
+/* ---------------------------------- */
+router.post(
+  "/:id/send-otp",
+  isDeliveryAuth,
+  sendSubOrderOTP
+);
+
+
+/* ---------------------------------- */
 /* ✅ Mark Delivered */
 /* ---------------------------------- */
 router.put(
   "/:id/deliver",
   isDeliveryAuth,
   completeAndDeleteSubOrder
+);
+
+
+/* ---------------------------------- */
+/* 🗑️ Dismiss / Soft Delete Order */
+/* ---------------------------------- */
+router.delete(
+  "/:id",
+  isDeliveryAuth,
+  deleteSubOrder
 );
 
 

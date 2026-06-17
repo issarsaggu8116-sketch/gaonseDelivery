@@ -43,6 +43,21 @@ const orderSchema = new mongoose.Schema(
       default: "pending",
     },
 
+    otp: Number,
+    otpExpire: Date,
+
+    deliveredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryPartner",
+      default: null,
+    },
+    deliveredAt: Date,
+    paymentStatus: {
+      type: String,
+      enum: ["pending", "paid", "failed"],
+      default: "pending",
+    },
+
     date: {
       type: String,
       default: () => new Date().toISOString(),

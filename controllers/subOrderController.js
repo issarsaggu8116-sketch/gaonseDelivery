@@ -3,6 +3,8 @@ import { SubOrder } from "../models/suborder.js";
 import { Wallet } from "../models/walletModel.js";
 import "../models/User.js";
 import { Subscription } from "../models/Subscriptions.js";
+import { Khata } from "../models/Khata.js";
+import { sendEmail } from "../utils/sendEmail.js";
 
 /* --------------------------------------------------- */
 /* 🥛 GENERATE SUBSCRIPTION ORDERS */
@@ -166,10 +168,13 @@ export const getTodaySubOrders = async (req, res) => {
       "address.zone._id":
         partner.zone.toString(),
 
+      isDeleted: { $ne: true },
+
       status: {
         $in: [
           "approved",
           "out_for_delivery",
+          "delivered",
         ],
       },
     };
@@ -183,7 +188,7 @@ export const getTodaySubOrders = async (req, res) => {
       await SubOrder.find(filter)
         .populate(
           "user",
-          "name phone"
+          "name email phone"
         )
         .sort({
           createdAt: -1,
@@ -247,7 +252,7 @@ export const startSubOrderDelivery = async (req, res) => {
     order.status = "out_for_delivery";
 
     order.deliveredBy =
-      req.delivery?._id || null;
+      req.partner?._id || null;
 
     await order.save();
 
@@ -284,7 +289,7 @@ export const completeAndDeleteSubOrder = async (req, res) => {
 
     const order = await SubOrder.findById(
       req.params.id
-    );
+    ).populate("user");
 
     if (!order) {
       return res.status(404).json({
@@ -304,6 +309,19 @@ export const completeAndDeleteSubOrder = async (req, res) => {
       });
     }
 
+    const { otp } = req.body;
+    if (!otp) {
+      return res.status(400).json({ success: false, message: "OTP is required" });
+    }
+
+    if (!order.otp || order.otp !== Number(otp)) {
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+
+    if (Date.now() > new Date(order.otpExpire).getTime()) {
+      return res.status(400).json({ success: false, message: "OTP Expired" });
+    }
+
     /* ------------------------------- */
     /* 2️⃣ MARK DELIVERED */
     /* ------------------------------- */
@@ -312,6 +330,22 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     order.deliveredAt = new Date();
 
     await order.save();
+
+    // 📓 Record in Khata
+    try {
+      await Khata.create({
+        partner: req.partner._id,
+        orderId: order._id.toString(),
+        orderType: "suborder",
+        itemName: order.item.name,
+        qty: order.item.qty,
+        price: order.item.price,
+        totalPrice: order.item.price * order.item.qty,
+        deliveredAt: order.deliveredAt,
+      });
+    } catch (khataErr) {
+      console.log("Failed to save to Khata:", khataErr.message);
+    }
 
     req.io?.emit(
       "subOrderDelivered",
@@ -348,15 +382,15 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     await wallet.save();
 
     /* ------------------------------- */
-    /* 5️⃣ DELETE ORDER */
+    /* 5️⃣ KEEP ORDER (SOFT-DELETE READY) */
     /* ------------------------------- */
-    await SubOrder.findByIdAndDelete(
-      req.params.id
-    );
+    // Keep in DB for duplicate prevention. Do not hard-delete.
+    order.isDeleted = false;
+    await order.save();
 
     req.io?.emit(
-      "subOrderDeleted",
-      req.params.id
+      "subOrderDelivered",
+      order
     );
 
     /* ------------------------------- */
@@ -365,7 +399,7 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     return res.json({
       success: true,
       message:
-        "Delivered, billed & deleted successfully",
+        "Delivered & billed successfully",
       walletBalance: wallet.balance,
     });
 
@@ -381,5 +415,64 @@ export const completeAndDeleteSubOrder = async (req, res) => {
       message: "Something went wrong",
     });
 
+  }
+};
+
+// 📧 SEND OTP FOR SUBSCRIPTION ORDER DELIVERY
+export const sendSubOrderOTP = async (req, res) => {
+  try {
+    const order = await SubOrder.findById(req.params.id).populate("user");
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Subscription order not found" });
+    }
+
+    if (order.status !== "out_for_delivery") {
+      return res.status(400).json({ success: false, message: "Order must be out for delivery to send OTP" });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000);
+    order.otp = otp;
+    order.otpExpire = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+    await order.save();
+
+    const email = order.user?.email;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "User email not found" });
+    }
+
+    await sendEmail({
+      email,
+      subject: `GAON SE - Delivery OTP for Subscription Order #${order._id}`,
+      message: `
+        <h2>GAON SE Delivery OTP</h2>
+        <p>Dear ${order.user.name || "Customer"},</p>
+        <p>Your OTP to verify your subscription delivery is: <b style="font-size: 18px; color: #1b5e20;">${otp}</b></p>
+        <p>Please share this OTP with the delivery partner to confirm receipt of your items.</p>
+        <p>This OTP is valid for 15 minutes.</p>
+      `,
+    });
+
+    res.json({ success: true, message: "OTP sent successfully to customer's email" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// 🗑️ SOFT DELETE SUBSCRIPTION ORDER FOR TODAY
+export const deleteSubOrder = async (req, res) => {
+  try {
+    const order = await SubOrder.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Subscription order not found" });
+    }
+
+    order.isDeleted = true;
+    await order.save();
+
+    req.io?.emit("subOrderDeleted", req.params.id);
+
+    res.json({ success: true, message: "Subscription order hidden successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };
