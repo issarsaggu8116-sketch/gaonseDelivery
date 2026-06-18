@@ -73,3 +73,5 @@ app.use("/api/delivery/khata", khataRoutes);
 server.listen(4001, () => {
   console.log("🚚 Delivery Server running on port 4001");
 });
+
+export default app;
