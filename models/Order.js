@@ -23,11 +23,15 @@ const orderSchema = new mongoose.Schema(
     },
 
     total: Number,
+    earning: {
+      type: Number,
+      default: 0,
+    },
 
     type: {
       type: String,
-      enum: ["cart", "subscription"],
-      default: "cart",
+      enum: ["cart", "subscription", "normal", "suborder"],
+      default: "normal",
     },
 
     status: {
@@ -65,5 +69,8 @@ const orderSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+orderSchema.index({ "address.zone._id": 1, status: 1, deliveredBy: 1 });
+orderSchema.index({ deliveredBy: 1, status: 1 });
 
 export const Order = mongoose.model("Order", orderSchema);

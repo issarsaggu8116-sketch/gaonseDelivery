@@ -5,6 +5,33 @@ import { Zone } from "../models/Zones.js";
 import { Khata } from "../models/Khata.js";
 import { User } from "../models/User.js";
 import { sendEmail } from "../utils/sendEmail.js";
+import { Setting } from "../models/Setting.js";
+import { Product } from "../models/Product.js";
+
+// Haversine formula to calculate distance in km
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  if (
+    lat1 === undefined || lat1 === null || isNaN(lat1) ||
+    lon1 === undefined || lon1 === null || isNaN(lon1) ||
+    lat2 === undefined || lat2 === null || isNaN(lat2) ||
+    lon2 === undefined || lon2 === null || isNaN(lon2)
+  ) {
+    return 0;
+  }
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) *
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; // Distance in km
+  return d;
+};
+
 
 // 📦 GET ZONE ORDERS
 export const getZoneOrders = async (req, res) => {
@@ -16,9 +43,9 @@ export const getZoneOrders = async (req, res) => {
     );
 
     const orders = await Order.find({
-      "address.zone._id":
-        partner.zone.toString(),
-
+      "address.zone._id": partner.zone.toString(),
+      deliveredBy: partner._id,
+      type: { $in: ["cart", "normal"] },
       status: {
         $in: [
           "approved",
@@ -53,7 +80,7 @@ export const getZoneOrders = async (req, res) => {
 // 🚚 START DELIVERY
 export const startDelivery = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findOne({ _id: req.params.id, deliveredBy: req.partner._id });
 
     if (!order) return res.status(404).json({ message: "Order not found" });
 
@@ -73,7 +100,7 @@ export const startDelivery = async (req, res) => {
 // ✅ COMPLETE DELIVERY + WALLET DEDUCTION READY
 export const completeDelivery = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findOne({ _id: req.params.id, deliveredBy: req.partner._id });
 
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
@@ -125,6 +152,33 @@ export const completeDelivery = async (req, res) => {
  
     await wallet.save();
     
+    // Calculate distance-based earnings
+    let rupeesPerKm = 10;
+    try {
+      const setting = await Setting.findOne({ city: req.partner.city });
+      if (setting && setting.rupeesPerKm !== undefined) {
+        rupeesPerKm = setting.rupeesPerKm;
+      }
+    } catch (settingErr) {
+      console.log("Failed to fetch settings:", settingErr.message);
+    }
+
+    let earning = 0;
+    try {
+      const zone = await Zone.findById(req.partner.zone);
+      if (zone && zone.center && zone.center.lat !== undefined && zone.center.lng !== undefined) {
+        const dist = calculateDistance(
+          zone.center.lat,
+          zone.center.lng,
+          order.address.latitude,
+          order.address.longitude
+        );
+        earning = Number((dist * rupeesPerKm).toFixed(2));
+      }
+    } catch (zoneErr) {
+      console.log("Failed to fetch zone or calculate distance:", zoneErr.message);
+    }
+
     // 🚚 Complete delivery
     order.status = "delivered";
     order.deliveredAt = new Date();
@@ -132,20 +186,36 @@ export const completeDelivery = async (req, res) => {
     order.paymentStatus = "paid";
     order.otp = null;
     order.otpExpire = null;
+    order.earning = earning;
 
     await order.save();
 
-    // 📓 Record in Khata
+    // 📦 Deduct Stock from Inventory
     try {
       for (const item of order.items) {
+        await Product.findByIdAndUpdate(
+          item._id,
+          { $inc: { currentStock: -item.qty } }
+        );
+      }
+    } catch (stockErr) {
+      console.log("Failed to deduct stock:", stockErr.message);
+    }
+
+    // 📓 Record in Khata
+    try {
+      const orderType = (order.type === "subscription" || order.type === "suborder") ? "suborder" : "order";
+      for (let i = 0; i < order.items.length; i++) {
+        const item = order.items[i];
         await Khata.create({
           partner: req.partner._id,
           orderId: order._id.toString(),
-          orderType: "order",
+          orderType: orderType,
           itemName: item.name,
           qty: item.qty,
           price: item.price,
           totalPrice: item.price * item.qty,
+          earning: i === 0 ? earning : 0,
           deliveredAt: order.deliveredAt,
         });
       }
@@ -175,7 +245,7 @@ export const completeDelivery = async (req, res) => {
 // 📧 SEND OTP FOR ORDER DELIVERY
 export const sendOrderOTP = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id).populate("user");
+    const order = await Order.findOne({ _id: req.params.id, deliveredBy: req.partner._id }).populate("user");
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
@@ -273,7 +343,7 @@ export const getDailySummary = async (req, res) => {
                 $cond: [{ $eq: ["$orderType", "suborder"] }, "$qty", 0],
               },
             },
-            totalAmount: { $sum: "$totalPrice" },
+            totalAmount: { $sum: "$earning" },
           },
         },
         { $sort: { totalQty: -1 } },
@@ -297,9 +367,9 @@ export const getDailySummary = async (req, res) => {
     /* 📦 NORMAL ORDERS */
     /* ---------------------------------- */
     const orders = await Order.find({
-      "address.zone._id":
-        partner.zone.toString(),
-
+      "address.zone._id": partner.zone.toString(),
+      deliveredBy: partner._id,
+      type: { $in: ["cart", "normal"] },
       status: {
         $in: [
           "approved",
@@ -311,10 +381,10 @@ export const getDailySummary = async (req, res) => {
     /* ---------------------------------- */
     /* 🔁 SUBSCRIPTION ORDERS */
     /* ---------------------------------- */
-    const subOrders = await SubOrder.find({
-      "address.zone._id":
-        partner.zone.toString(),
-
+    const subOrders = await Order.find({
+      "address.zone._id": partner.zone.toString(),
+      deliveredBy: partner._id,
+      type: { $in: ["subscription", "suborder"] },
       status: {
         $in: [
           "approved",
@@ -338,7 +408,7 @@ export const getDailySummary = async (req, res) => {
     /* ---------------------------------- */
     orders.forEach((order) => {
 
-      totalAmount += order.total;
+      totalAmount += (order.earning || 0);
 
       order.items.forEach((item) => {
 
@@ -372,36 +442,25 @@ export const getDailySummary = async (req, res) => {
     /* 🔁 SUBSCRIPTION ORDERS LOOP */
     /* ---------------------------------- */
     subOrders.forEach((order) => {
+      totalAmount += (order.earning || 0);
 
-      totalAmount += order.total;
+      order.items?.forEach((item) => {
+        const key = item.name;
 
-      const item =
-        order.item;
+        if (!itemsMap[key]) {
+          itemsMap[key] = {
+            name: item.name,
+            totalQty: 0,
+            normalQty: 0,
+            subscriptionQty: 0,
+            totalAmount: 0,
+          };
+        }
 
-      const key =
-        item?.name;
-
-      if (!itemsMap[key]) {
-
-        itemsMap[key] = {
-          name: item.name,
-
-          totalQty: 0,
-
-          normalQty: 0,
-
-          subscriptionQty: 0,
-
-          totalAmount: 0,
-        };
-      }
-
-      itemsMap[key].totalQty += item.qty;
-
-      itemsMap[key].subscriptionQty += item.qty;
-
-      itemsMap[key].totalAmount +=
-        item.price * item.qty;
+        itemsMap[key].totalQty += item.qty;
+        itemsMap[key].subscriptionQty += item.qty;
+        itemsMap[key].totalAmount += item.price * item.qty;
+      });
     });
 
     /* ---------------------------------- */
@@ -439,12 +498,22 @@ export const getDashboardMetrics = async (req, res) => {
 
     const pendingOrdersCount = await Order.countDocuments({
       "address.zone._id": partner.zone.toString(),
+      deliveredBy: partner._id,
+      type: { $in: ["cart", "normal"] },
       status: { $in: ["approved", "out_for_delivery"] },
     });
 
-    const pendingSubOrdersCount = await SubOrder.countDocuments({
+    const pendingSubOrdersCount = await Order.countDocuments({
       "address.zone._id": partner.zone.toString(),
+      deliveredBy: partner._id,
+      type: { $in: ["subscription", "suborder"] },
       status: { $in: ["approved", "out_for_delivery"] },
+    });
+
+    const unassignedOrdersCount = await Order.countDocuments({
+      "address.zone._id": partner.zone.toString(),
+      status: "pending",
+      deliveredBy: null,
     });
 
     const totalPending = pendingOrdersCount + pendingSubOrdersCount;
@@ -464,7 +533,7 @@ export const getDashboardMetrics = async (req, res) => {
       {
         $group: {
           _id: null,
-          totalEarnings: { $sum: "$totalPrice" },
+          totalEarnings: { $sum: "$earning" },
         },
       },
     ]);
@@ -474,6 +543,7 @@ export const getDashboardMetrics = async (req, res) => {
     res.json({
       success: true,
       pendingOrdersCount: totalPending,
+      unassignedOrdersCount,
       todayEarnings,
     });
   } catch (err) {
@@ -481,5 +551,175 @@ export const getDashboardMetrics = async (req, res) => {
       success: false,
       message: err.message,
     });
+  }
+};
+
+// 📦 GET UNASSIGNED ZONE ORDERS
+export const getUnassignedZoneOrders = async (req, res) => {
+  try {
+    const partner = req.partner;
+
+    const zone = await Zone.findById(partner.zone);
+    if (!zone) {
+      return res.status(404).json({ success: false, message: "Zone not found" });
+    }
+
+    const orders = await Order.find({
+      "address.zone._id": partner.zone.toString(),
+      status: "pending",
+      deliveredBy: null,
+    })
+      .populate("user", "name email phone")
+      .sort({ createdAt: -1 });
+
+    // Fetch rupeesPerKm setting for the city
+    let rupeesPerKm = 10;
+    try {
+      const setting = await Setting.findOne({ city: partner.city });
+      if (setting && setting.rupeesPerKm !== undefined) {
+        rupeesPerKm = setting.rupeesPerKm;
+      }
+    } catch (settingErr) {
+      console.log("Failed to fetch settings in getUnassignedZoneOrders:", settingErr.message);
+    }
+
+    // Map orders to include estimated earning
+    const ordersWithEarning = orders.map(o => {
+      let estimatedEarning = 0;
+      if (zone.center && zone.center.lat !== undefined && zone.center.lng !== undefined) {
+        const dist = calculateDistance(
+          zone.center.lat,
+          zone.center.lng,
+          o.address?.latitude,
+          o.address?.longitude
+        );
+        estimatedEarning = Number((dist * rupeesPerKm).toFixed(2));
+      }
+      return {
+        ...o.toObject(),
+        earning: estimatedEarning
+      };
+    });
+
+    res.json({
+      success: true,
+      count: ordersWithEarning.length,
+      partnerZoneId: partner.zone.toString(),
+      zoneCenter: {
+        lat: zone.center.lat,
+        lng: zone.center.lng,
+      },
+      orders: ordersWithEarning,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// 🚴 ACCEPT ORDER
+export const acceptOrder = async (req, res) => {
+  try {
+    const partner = req.partner;
+    const orderId = req.params.id;
+
+    // Check if the order is available to accept
+    const order = await Order.findOne({
+      _id: orderId,
+      status: "pending",
+      deliveredBy: null,
+      "address.zone._id": partner.zone.toString(),
+    });
+
+    if (!order) {
+      return res.status(400).json({
+        success: false,
+        message: "Order already accepted by another partner or does not exist",
+      });
+    }
+
+    // Calculate distance-based earnings
+    let rupeesPerKm = 10;
+    try {
+      const setting = await Setting.findOne({ city: partner.city });
+      if (setting && setting.rupeesPerKm !== undefined) {
+        rupeesPerKm = setting.rupeesPerKm;
+      }
+    } catch (settingErr) {
+      console.log("Failed to fetch settings in acceptOrder:", settingErr.message);
+    }
+
+    let earning = 0;
+    try {
+      const zone = await Zone.findById(partner.zone);
+      if (zone && zone.center && zone.center.lat !== undefined && zone.center.lng !== undefined) {
+        const dist = calculateDistance(
+          zone.center.lat,
+          zone.center.lng,
+          order.address.latitude,
+          order.address.longitude
+        );
+        earning = Number((dist * rupeesPerKm).toFixed(2));
+      }
+    } catch (zoneErr) {
+      console.log("Failed to fetch zone or calculate distance in acceptOrder:", zoneErr.message);
+    }
+
+    // Assign to partner atomically (double check availability)
+    const updatedOrder = await Order.findOneAndUpdate(
+      {
+        _id: orderId,
+        status: "pending",
+        deliveredBy: null,
+      },
+      {
+        $set: {
+          deliveredBy: partner._id,
+          status: "approved",
+          earning: earning,
+        },
+      },
+      { new: true }
+    ).populate("user", "name email phone");
+
+    if (!updatedOrder) {
+      return res.status(400).json({
+        success: false,
+        message: "Order already accepted by another partner",
+      });
+    }
+
+    // Notify other partners in the zone
+    if (req.io) {
+      req.io.to(partner.zone.toString()).emit("orderAcceptedByPartner", {
+        orderId: updatedOrder._id,
+        deliveredBy: partner._id,
+        deliveredByName: partner.name,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Order accepted successfully",
+      order: updatedOrder,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// 📡 NOTIFY NEW ORDER (INTERNAL WEBHOOK)
+export const notifyNewOrder = async (req, res) => {
+  try {
+    const { order } = req.body;
+    if (order && req.io) {
+      const zoneId = order.address?.zone?._id?.toString() || order.address?.zone?.toString();
+      if (zoneId) {
+        req.io.to(zoneId).emit("newOrder", order);
+        console.log(`📡 Broadcasted newOrder to zone room: ${zoneId}`);
+      }
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };

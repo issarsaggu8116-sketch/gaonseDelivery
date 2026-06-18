@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { Subscription } from "../models/Subscriptions.js";
-import { SubOrder } from "../models/suborder.js";
+import { Order } from "../models/Order.js";
 import { Product } from "../models/Product.js";
 
 export const generateTodaySubscriptionOrders = () => {
@@ -30,9 +30,11 @@ export const generateTodaySubscriptionOrders = () => {
       let createdCount = 0;
 
       for (const sub of subscriptions) {
-        const alreadyExists = await SubOrder.findOne({
-          subscription: sub._id,
-          createdAt: { $gte: startOfDay, $lte: endOfDay }
+        const alreadyExists = await Order.findOne({
+          user: sub.user,
+          type: "suborder",
+          createdAt: { $gte: startOfDay, $lte: endOfDay },
+          "items.0._id": String(sub.product._id),
         });
 
         if (alreadyExists) continue;
@@ -40,26 +42,34 @@ export const generateTodaySubscriptionOrders = () => {
         const price = sub.product?.price || 0;
         const total = price * sub.quantity;
 
-        await SubOrder.create({
+        const order = await Order.create({
           user: sub.user,
-          subscription: sub._id,
-
-          item: {
-            _id: String(sub.product._id),
-            name: sub.product.name,
-            price,
-            qty: sub.quantity
-          },
-
+          items: [
+            {
+              _id: String(sub.product._id),
+              name: sub.product.name,
+              price,
+              qty: sub.quantity
+            }
+          ],
           address: sub.address,
           total,
-          status: "approved"
+          type: "suborder",
+          status: "pending",
+          deliveredBy: null,
+          date: new Date().toISOString(),
         });
+
+        // Notify partners in this zone via global socket server
+        if (global.io) {
+          const zoneId = sub.address.zone._id?.toString() || sub.address.zone.toString();
+          global.io.to(zoneId).emit("newOrder", order);
+        }
 
         createdCount++;
       }
 
-      console.log(`🥛 Subscription Orders Created: ${createdCount}`);
+      console.log(`🥛 Subscription Orders Created in orders: ${createdCount}`);
     } catch (err) {
       console.log("SUBSCRIPTION CRON ERROR:", err.message);
     }

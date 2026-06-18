@@ -32,6 +32,10 @@ const khataSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    earning: {
+      type: Number,
+      default: 0,
+    },
     deliveredAt: {
       type: Date,
       default: Date.now,

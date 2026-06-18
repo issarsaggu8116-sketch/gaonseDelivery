@@ -1,10 +1,37 @@
 import { Zone } from "../models/Zones.js";
-import { SubOrder } from "../models/suborder.js";
+import { Order } from "../models/Order.js";
 import { Wallet } from "../models/walletModel.js";
 import "../models/User.js";
 import { Subscription } from "../models/Subscriptions.js";
 import { Khata } from "../models/Khata.js";
 import { sendEmail } from "../utils/sendEmail.js";
+import { Setting } from "../models/Setting.js";
+import { Product } from "../models/Product.js";
+
+// Haversine formula to calculate distance in km
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  if (
+    lat1 === undefined || lat1 === null || isNaN(lat1) ||
+    lon1 === undefined || lon1 === null || isNaN(lon1) ||
+    lat2 === undefined || lat2 === null || isNaN(lat2) ||
+    lon2 === undefined || lon2 === null || isNaN(lon2)
+  ) {
+    return 0;
+  }
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) *
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; // Distance in km
+  return d;
+};
+
 
 /* --------------------------------------------------- */
 /* 🥛 GENERATE SUBSCRIPTION ORDERS */
@@ -68,17 +95,14 @@ const subscriptions = await Subscription.find({
       /* ---------------------------------- */
       /* 🚫 DUPLICATE CHECK */
       /* ---------------------------------- */
-      const alreadyExists = await SubOrder.findOne({
-
-        subscription: sub._id,
-
-        deliveryTime,
-
+      const alreadyExists = await Order.findOne({
+        user: sub.user,
+        type: "suborder",
         createdAt: {
           $gte: startOfDay,
           $lte: endOfDay,
         },
-
+        "items.0._id": String(sub.product._id),
       });
 
       if (alreadyExists) continue;
@@ -90,28 +114,28 @@ const subscriptions = await Subscription.find({
       /* ---------------------------------- */
       /* 🧾 CREATE ORDER */
       /* ---------------------------------- */
-      await SubOrder.create({
-
+      const order = await Order.create({
         user: sub.user,
-
-        subscription: sub._id,
-
-        deliveryTime,
-
-        item: {
-          _id: String(sub.product._id),
-          name: sub.product.name,
-          price,
-          qty: sub.quantity,
-        },
-
+        items: [
+          {
+            _id: String(sub.product._id),
+            name: sub.product.name,
+            price,
+            qty: sub.quantity,
+          },
+        ],
         address: sub.address,
-
         total,
-
-        status: "approved",
-
+        type: "suborder",
+        status: "pending",
+        deliveredBy: null,
       });
+
+      // Notify partners in this zone
+      if (req.io) {
+        const zoneId = sub.address.zone._id?.toString() || sub.address.zone.toString();
+        req.io.to(zoneId).emit("newOrder", order);
+      }
 
       createdCount++;
     }
@@ -165,8 +189,9 @@ export const getTodaySubOrders = async (req, res) => {
         $lte: end,
       },
 
-      "address.zone._id":
-        partner.zone.toString(),
+      "address.zone._id": partner.zone.toString(),
+      deliveredBy: partner._id,
+      type: { $in: ["subscription", "suborder"] },
 
       isDeleted: { $ne: true },
 
@@ -180,32 +205,29 @@ export const getTodaySubOrders = async (req, res) => {
     };
 
     if (deliveryTime) {
-      filter.deliveryTime =
-        deliveryTime;
+      filter.deliveryTime = deliveryTime;
     }
 
-    const orders =
-      await SubOrder.find(filter)
-        .populate(
-          "user",
-          "name email phone"
-        )
-        .sort({
-          createdAt: -1,
-        })
-        .lean();
+    const dbOrders = await Order.find(filter)
+      .populate("user", "name email phone")
+      .sort({
+        createdAt: -1,
+      })
+      .lean();
+
+    const mappedOrders = dbOrders.map((o) => ({
+      ...o,
+      item: o.items && o.items.length > 0 ? o.items[0] : null,
+    }));
 
     return res.json({
       success: true,
-
-      count: orders.length,
-
+      count: mappedOrders.length,
       zoneCenter: {
         lat: zone.center.lat,
         lng: zone.center.lng,
       },
-
-      orders,
+      orders: mappedOrders,
     });
 
   } catch (err) {
@@ -230,9 +252,11 @@ export const getTodaySubOrders = async (req, res) => {
 export const startSubOrderDelivery = async (req, res) => {
   try {
 
-    const order = await SubOrder.findById(
-      req.params.id
-    );
+    const order = await Order.findOne({
+      _id: req.params.id,
+      deliveredBy: req.partner?._id,
+      type: { $in: ["subscription", "suborder"] }
+    });
 
     if (!order) {
       return res.status(404).json({
@@ -287,9 +311,11 @@ export const startSubOrderDelivery = async (req, res) => {
 export const completeAndDeleteSubOrder = async (req, res) => {
   try {
 
-    const order = await SubOrder.findById(
-      req.params.id
-    ).populate("user");
+    const order = await Order.findOne({
+      _id: req.params.id,
+      deliveredBy: req.partner._id,
+      type: { $in: ["subscription", "suborder"] }
+    }).populate("user");
 
     if (!order) {
       return res.status(404).json({
@@ -326,10 +352,49 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     /* 2️⃣ MARK DELIVERED */
     /* ------------------------------- */
     order.status = "delivered";
-
     order.deliveredAt = new Date();
 
+    // Calculate distance-based earnings
+    let rupeesPerKm = 10;
+    try {
+      const setting = await Setting.findOne({ city: req.partner.city });
+      if (setting && setting.rupeesPerKm !== undefined) {
+        rupeesPerKm = setting.rupeesPerKm;
+      }
+    } catch (settingErr) {
+      console.log("Failed to fetch settings in completeAndDeleteSubOrder:", settingErr.message);
+    }
+
+    let earning = 0;
+    try {
+      const zone = await Zone.findById(req.partner.zone);
+      if (zone && zone.center && zone.center.lat !== undefined && zone.center.lng !== undefined) {
+        const dist = calculateDistance(
+          zone.center.lat,
+          zone.center.lng,
+          order.address.latitude,
+          order.address.longitude
+        );
+        earning = Number((dist * rupeesPerKm).toFixed(2));
+      }
+    } catch (zoneErr) {
+      console.log("Failed to fetch zone or calculate distance in completeAndDeleteSubOrder:", zoneErr.message);
+    }
+
+    order.earning = earning;
     await order.save();
+
+    // 📦 Deduct Stock from Inventory
+    try {
+      for (const item of order.items) {
+        await Product.findByIdAndUpdate(
+          item._id,
+          { $inc: { currentStock: -item.qty } }
+        );
+      }
+    } catch (stockErr) {
+      console.log("Failed to deduct suborder stock:", stockErr.message);
+    }
 
     // 📓 Record in Khata
     try {
@@ -337,10 +402,11 @@ export const completeAndDeleteSubOrder = async (req, res) => {
         partner: req.partner._id,
         orderId: order._id.toString(),
         orderType: "suborder",
-        itemName: order.item.name,
-        qty: order.item.qty,
-        price: order.item.price,
-        totalPrice: order.item.price * order.item.qty,
+        itemName: order.items[0]?.name || "Product",
+        qty: order.items[0]?.qty || 0,
+        price: order.items[0]?.price || 0,
+        totalPrice: (order.items[0]?.price || 0) * (order.items[0]?.qty || 0),
+        earning: earning,
         deliveredAt: order.deliveredAt,
       });
     } catch (khataErr) {
@@ -421,7 +487,11 @@ export const completeAndDeleteSubOrder = async (req, res) => {
 // 📧 SEND OTP FOR SUBSCRIPTION ORDER DELIVERY
 export const sendSubOrderOTP = async (req, res) => {
   try {
-    const order = await SubOrder.findById(req.params.id).populate("user");
+    const order = await Order.findOne({
+      _id: req.params.id,
+      deliveredBy: req.partner._id,
+      type: { $in: ["subscription", "suborder"] }
+    }).populate("user");
     if (!order) {
       return res.status(404).json({ success: false, message: "Subscription order not found" });
     }
@@ -461,7 +531,11 @@ export const sendSubOrderOTP = async (req, res) => {
 // 🗑️ SOFT DELETE SUBSCRIPTION ORDER FOR TODAY
 export const deleteSubOrder = async (req, res) => {
   try {
-    const order = await SubOrder.findById(req.params.id);
+    const order = await Order.findOne({
+      _id: req.params.id,
+      deliveredBy: req.partner._id,
+      type: { $in: ["subscription", "suborder"] }
+    });
     if (!order) {
       return res.status(404).json({ success: false, message: "Subscription order not found" });
     }
