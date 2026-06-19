@@ -32,6 +32,11 @@ const userSchema = new mongoose.Schema({
   resetPasswordToken: String,
   resetPasswordExpire: Date,
 
+  tempEmail: String,
+  tempPhone: String,
+  tempOTP: Number,
+  tempOTPExpire: Date,
+
   createdAt: {
     type: Date,
     default: Date.now,
