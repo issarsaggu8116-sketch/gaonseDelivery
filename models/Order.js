@@ -34,6 +34,12 @@ const orderSchema = new mongoose.Schema(
       default: "normal",
     },
 
+    deliveryTime: {
+      type: String,
+      enum: ["morning", "evening"],
+      default: "morning",
+    },
+
     status: {
       type: String,
       enum: [

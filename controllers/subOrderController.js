@@ -129,6 +129,7 @@ const subscriptions = await Subscription.find({
         type: "suborder",
         status: "pending",
         deliveredBy: null,
+        deliveryTime: sub.deliveryTime || deliveryTime,
       });
 
       // Notify partners in this zone
