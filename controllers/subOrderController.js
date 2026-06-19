@@ -370,10 +370,33 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     }
 
     /* ------------------------------- */
-    /* 2️⃣ MARK DELIVERED */
+    /* 1.5️⃣ WALLET CHECK */
+    /* ------------------------------- */
+    const wallet = await Wallet.findOne({
+      user: order.user,
+    });
+
+    if (!wallet) {
+      return res.status(404).json({
+        success: false,
+        message: "Wallet not found",
+      });
+    }
+
+    if (wallet.balance < order.total) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient wallet balance",
+      });
+    }
+
+    /* ------------------------------- */
+    /* 2️⃣ MARK DELIVERED & DEDUCT WALLET */
     /* ------------------------------- */
     order.status = "delivered";
     order.deliveredAt = new Date();
+    order.otp = null;
+    order.otpExpire = null;
 
     // Calculate distance-based earnings
     let rupeesPerKm = 10;
@@ -403,6 +426,7 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     }
 
     order.earning = earning;
+    order.isDeleted = false;
     await order.save();
 
     // 📦 Deduct Stock from Inventory
@@ -434,46 +458,9 @@ export const completeAndDeleteSubOrder = async (req, res) => {
       console.log("Failed to save to Khata:", khataErr.message);
     }
 
-    req.io?.emit(
-      "subOrderDelivered",
-      order
-    );
-
-    /* ------------------------------- */
-    /* 3️⃣ WALLET CHECK */
-    /* ------------------------------- */
-    const wallet = await Wallet.findOne({
-      user: order.user,
-    });
-
-    if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found",
-      });
-    }
-
-    if (wallet.balance < order.total) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Insufficient wallet balance",
-      });
-    }
-
-    /* ------------------------------- */
-    /* 4️⃣ DEDUCT WALLET */
-    /* ------------------------------- */
+    // 💰 Deduct wallet amount
     wallet.balance -= order.total;
-
     await wallet.save();
-
-    /* ------------------------------- */
-    /* 5️⃣ KEEP ORDER (SOFT-DELETE READY) */
-    /* ------------------------------- */
-    // Keep in DB for duplicate prevention. Do not hard-delete.
-    order.isDeleted = false;
-    await order.save();
 
     req.io?.emit(
       "subOrderDelivered",
@@ -485,8 +472,7 @@ export const completeAndDeleteSubOrder = async (req, res) => {
     /* ------------------------------- */
     return res.json({
       success: true,
-      message:
-        "Delivered & billed successfully",
+      message: "Delivered & billed successfully",
       walletBalance: wallet.balance,
     });
 
