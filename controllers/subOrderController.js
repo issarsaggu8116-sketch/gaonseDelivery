@@ -88,53 +88,73 @@ const subscriptions = await Subscription.find({
   ],
 }).populate("product");
 
-    let createdCount = 0;
+    // Group subscriptions by user and deliveryTime
+    const userGroups = {};
 
     for (const sub of subscriptions) {
+      if (!sub.user || !sub.product) continue;
+
+      const userId = sub.user.toString();
+      const subDeliveryTime = sub.deliveryTime || deliveryTime || "morning";
+      const key = `${userId}_${subDeliveryTime}`;
+
+      if (!userGroups[key]) {
+        userGroups[key] = {
+          user: sub.user,
+          deliveryTime: subDeliveryTime,
+          address: sub.address,
+          subscriptions: []
+        };
+      }
+      userGroups[key].subscriptions.push(sub);
+    }
+
+    let createdCount = 0;
+
+    for (const key of Object.keys(userGroups)) {
+      const group = userGroups[key];
 
       /* ---------------------------------- */
       /* 🚫 DUPLICATE CHECK */
       /* ---------------------------------- */
       const alreadyExists = await Order.findOne({
-        user: sub.user,
+        user: group.user,
         type: "suborder",
         createdAt: {
           $gte: startOfDay,
           $lte: endOfDay,
         },
-        "items.0._id": String(sub.product._id),
+        deliveryTime: group.deliveryTime,
       });
 
       if (alreadyExists) continue;
 
-      const price = sub.product?.price || 0;
+      const items = group.subscriptions.map((s) => ({
+        _id: String(s.product._id),
+        name: s.product.name,
+        price: s.product.price || 0,
+        qty: s.quantity,
+      }));
 
-      const total = price * sub.quantity;
+      const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
 
       /* ---------------------------------- */
       /* 🧾 CREATE ORDER */
       /* ---------------------------------- */
       const order = await Order.create({
-        user: sub.user,
-        items: [
-          {
-            _id: String(sub.product._id),
-            name: sub.product.name,
-            price,
-            qty: sub.quantity,
-          },
-        ],
-        address: sub.address,
+        user: group.user,
+        items,
+        address: group.address,
         total,
         type: "suborder",
         status: "pending",
         deliveredBy: null,
-        deliveryTime: sub.deliveryTime || deliveryTime,
+        deliveryTime: group.deliveryTime,
       });
 
       // Notify partners in this zone
       if (req.io) {
-        const zoneId = sub.address.zone._id?.toString() || sub.address.zone.toString();
+        const zoneId = group.address.zone._id?.toString() || group.address.zone.toString();
         req.io.to(zoneId).emit("newOrder", order);
       }
 

@@ -26,43 +26,66 @@ export const generateSubscriptionOrdersInternal = async () => {
       ]
     }).populate("product");
 
-    let createdCount = 0;
+    // Group subscriptions by user and deliveryTime
+    const userGroups = {};
 
     for (const sub of subscriptions) {
+      if (!sub.user || !sub.product) continue;
+
+      const userId = sub.user.toString();
+      const deliveryTime = sub.deliveryTime || "morning";
+      const key = `${userId}_${deliveryTime}`;
+
+      if (!userGroups[key]) {
+        userGroups[key] = {
+          user: sub.user,
+          deliveryTime,
+          address: sub.address,
+          subscriptions: []
+        };
+      }
+      userGroups[key].subscriptions.push(sub);
+    }
+
+    let createdCount = 0;
+
+    for (const key of Object.keys(userGroups)) {
+      const group = userGroups[key];
+
+      // Check if a subscription order already exists today for this user and deliveryTime
       const alreadyExists = await Order.findOne({
-        user: sub.user,
+        user: group.user,
         type: "suborder",
         createdAt: { $gte: startOfDay, $lte: endOfDay },
-        "items.0._id": String(sub.product._id),
+        deliveryTime: group.deliveryTime
       });
 
       if (alreadyExists) continue;
 
-      const price = sub.product?.price || 0;
-      const total = price * sub.quantity;
+      const items = group.subscriptions.map((s) => ({
+        _id: String(s.product._id),
+        name: s.product.name,
+        price: s.product.price || 0,
+        qty: s.quantity
+      }));
+
+      const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
 
       const order = await Order.create({
-        user: sub.user,
-        items: [
-          {
-            _id: String(sub.product._id),
-            name: sub.product.name,
-            price,
-            qty: sub.quantity
-          }
-        ],
-        address: sub.address,
+        user: group.user,
+        items,
+        address: group.address,
         total,
         type: "suborder",
         status: "pending",
         deliveredBy: null,
-        deliveryTime: sub.deliveryTime,
-        date: new Date().toISOString(),
+        deliveryTime: group.deliveryTime,
+        date: new Date().toISOString()
       });
 
       // Notify partners in this zone via global socket server
       if (global.io) {
-        const zoneId = sub.address.zone._id?.toString() || sub.address.zone.toString();
+        const zoneId = group.address.zone._id?.toString() || group.address.zone.toString();
         global.io.to(zoneId).emit("newOrder", order);
       }
 
